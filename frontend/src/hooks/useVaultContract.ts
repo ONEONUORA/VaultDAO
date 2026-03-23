@@ -820,7 +820,7 @@ export const useVaultContract = () => {
 
     return {
         proposeTransfer, approveProposal, rejectProposal, executeProposal,
-        addSigner, removeSigner, updateThreshold, updateSpendingLimits,
+        addSigner, removeSigner, updateThreshold,
         getDashboardStats, getVaultEvents, loading,
         simulateProposeTransfer, simulateApproveProposal, simulateExecuteProposal, simulateRejectProposal,
         getProposalSignatures, remindSigner, exportSignatures,
@@ -842,6 +842,7 @@ export const useVaultContract = () => {
         setRole: async () => { },
         getUserRole,
         assignRole: async () => { },
+        updateSpendingLimits,
         getProposals,
     };
 };
