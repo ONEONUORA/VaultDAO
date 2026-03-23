@@ -10,6 +10,7 @@ import ProposalFilters, { type FilterState } from '../../components/proposals/Pr
 import ProposalComparison from '../../components/ProposalComparison';
 import { useToast } from '../../hooks/useToast';
 import { useVaultContract } from '../../hooks/useVaultContract';
+import { useProposals } from '../../hooks/useProposals';
 import { useWallet } from '../../hooks/useWallet';
 import { useRealtime } from '../../contexts/RealtimeContext';
 import type { TokenInfo, TokenBalance } from '../../types';
@@ -60,8 +61,14 @@ const Proposals: React.FC = () => {
   const { address } = useWallet();
   const { subscribe, updatePresence } = useRealtime();
 
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [loading, setLoading] = useState(false);
+  const {
+    proposals,
+    loading,
+    error: proposalsError,
+    refetch: refetchProposals,
+  } = useProposals();
+
+  const [localProposals, setLocalProposals] = useState<Proposal[]>([]);
   const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set());
   const [showNewProposalModal, setShowNewProposalModal] = useState(false);
   const [selectedProposal, setSelectedProposal] = useState<Proposal | null>(null);
@@ -106,76 +113,10 @@ const Proposals: React.FC = () => {
     fetchBalances();
   }, [getTokenBalances]);
 
+  // Sync real proposals into local state (local state handles optimistic updates)
   useEffect(() => {
-    const fetchProposals = async () => {
-      setLoading(true);
-      try {
-        const mockData: Proposal[] = [
-          {
-            id: '1',
-            proposer: '0x123...456',
-            recipient: '0xabc...def',
-            amount: '100',
-            token: 'NATIVE',
-            tokenSymbol: 'XLM',
-            memo: 'Liquidity Pool Expansion',
-            status: 'Pending',
-            approvals: 1,
-            threshold: 3,
-            approvedBy: ['0x123...456'],
-            createdAt: new Date().toISOString()
-          },
-          {
-            id: '2',
-            proposer: '0x789...012',
-            recipient: '0xdef...ghi',
-            amount: '250',
-            token: 'USDC',
-            memo: 'Marketing Campaign',
-            status: 'Pending',
-            approvals: 2,
-            threshold: 3,
-            approvedBy: ['0x789...012', '0xaaa...bbb'],
-            createdAt: new Date().toISOString()
-          },
-          {
-            id: '2',
-            proposer: '0x789...012',
-            recipient: '0xdef...abc',
-            amount: '500',
-            token: 'CCW67TSZV3SUUJZYHWVPQWJ7B5BODJHYKJRC5QK7L5HHQFJGVY7H3LRL',
-            tokenSymbol: 'USDC',
-            memo: 'Marketing Campaign Budget',
-            status: 'Approved',
-            approvals: 3,
-            threshold: 3,
-            approvedBy: ['0x789...012', '0xaaa...bbb', '0xccc...ddd'],
-            createdAt: new Date(Date.now() - 86400000).toISOString()
-          },
-          {
-            id: '3',
-            proposer: '0x345...678',
-            recipient: '0xghi...jkl',
-            amount: '250',
-            token: 'NATIVE',
-            tokenSymbol: 'XLM',
-            memo: 'Community Rewards Distribution',
-            status: 'Executed',
-            approvals: 3,
-            approvedBy: ['0x345...678', '0xaaa...bbb', '0xccc...ddd'],
-            threshold: 3,
-            createdAt: new Date(Date.now() - 172800000).toISOString()
-          }
-        ];
-        setProposals(mockData);
-      } catch (error) {
-        console.error(error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchProposals();
-  }, []);
+    setLocalProposals(proposals);
+  }, [proposals]);
 
   // Subscribe to real-time proposal updates
   useEffect(() => {
@@ -183,16 +124,16 @@ const Proposals: React.FC = () => {
 
     const unsubscribers = [
       subscribe('proposal_created', (data: Proposal) => {
-        setProposals((prev) => [data, ...prev]);
+        setLocalProposals((prev) => [data, ...prev]);
         notify('new_proposal', `New proposal #${data.id} created`, 'info');
       }),
       subscribe('proposal_updated', (data: { id: string; updates: Partial<Proposal> }) => {
-        setProposals((prev) =>
+        setLocalProposals((prev) =>
           prev.map((p) => (p.id === data.id ? { ...p, ...data.updates } : p))
         );
       }),
       subscribe('proposal_approved', (data: { id: string; approver: string }) => {
-        setProposals((prev) =>
+        setLocalProposals((prev) =>
           prev.map((p) => {
             if (p.id === data.id) {
               const newApprovals = p.approvals + 1;
@@ -210,7 +151,7 @@ const Proposals: React.FC = () => {
         notify('proposal_approved', `Proposal #${data.id} approved`, 'success');
       }),
       subscribe('proposal_rejected', (data: { id: string }) => {
-        setProposals((prev) =>
+        setLocalProposals((prev) =>
           prev.map((p) => (p.id === data.id ? { ...p, status: 'Rejected' } : p))
         );
         notify('proposal_rejected', `Proposal #${data.id} rejected`, 'error');
@@ -224,7 +165,7 @@ const Proposals: React.FC = () => {
 
   // Filter proposals by token and other filters
   const filteredProposals = useMemo(() => {
-    const filtered = proposals.filter((p) => {
+    const filtered = localProposals.filter((p) => {
       // Search filter
       const searchLower = activeFilters.search.toLowerCase();
       const matchesSearch =
@@ -265,13 +206,13 @@ const Proposals: React.FC = () => {
         default: return dateB - dateA;
       }
     });
-  }, [proposals, activeFilters]);
+  }, [localProposals, activeFilters]);
 
   const handleRejectConfirm = async () => {
     if (!rejectingId) return;
     try {
       await rejectProposal(Number(rejectingId));
-      setProposals(prev => prev.map(p => p.id === rejectingId ? { ...p, status: 'Rejected' } : p));
+      setLocalProposals(prev => prev.map(p => p.id === rejectingId ? { ...p, status: 'Rejected' } : p));
       notify('proposal_rejected', `Proposal #${rejectingId} rejected`, 'success');
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to reject';
@@ -292,7 +233,7 @@ const Proposals: React.FC = () => {
     setApprovingIds(prev => new Set(prev).add(proposalId));
     try {
       await approveProposal(Number(proposalId));
-      setProposals(prev => prev.map(p => {
+      setLocalProposals(prev => prev.map(p => {
         if (p.id === proposalId) {
           const newApprovals = p.approvals + 1;
           const newApprovedBy = [...p.approvedBy, address];
@@ -354,7 +295,22 @@ const Proposals: React.FC = () => {
         <ProposalFilters proposalCount={filteredProposals.length} onFilterChange={setActiveFilters} />
 
         <div className="mt-6 grid grid-cols-1 gap-4">
-          {filteredProposals.length > 0 ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 bg-gray-800/20 rounded-3xl border border-dashed border-gray-700">
+              <Loader2 size={40} className="text-purple-400 animate-spin mb-4" />
+              <p className="text-gray-400 text-lg font-medium">Loading proposals...</p>
+            </div>
+          ) : proposalsError ? (
+            <div className="flex flex-col items-center justify-center py-12 px-4 bg-gray-800/20 rounded-3xl border border-dashed border-red-700/50">
+              <p className="text-red-400 text-lg font-medium mb-3">{proposalsError}</p>
+              <button
+                onClick={() => void refetchProposals()}
+                className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg text-sm transition"
+              >
+                Retry
+              </button>
+            </div>
+          ) : filteredProposals.length > 0 ? (
             filteredProposals.map((prop) => {
               const isApproving = approvingIds.has(prop.id);
               const hasUserApproved = address ? prop.approvedBy.includes(address) : false;
@@ -502,7 +458,9 @@ const Proposals: React.FC = () => {
           ) : (
             <div className="flex flex-col items-center justify-center py-12 px-4 bg-gray-800/20 rounded-3xl border border-dashed border-gray-700">
               <SearchX size={48} className="text-gray-600 mb-4" />
-              <p className="text-gray-400 text-lg font-medium">No proposals match your filters</p>
+              <p className="text-gray-400 text-lg font-medium">
+                {localProposals.length === 0 ? 'No proposals found on-chain yet' : 'No proposals match your filters'}
+              </p>
             </div>
           )}
         </div>
@@ -522,7 +480,7 @@ const Proposals: React.FC = () => {
         <ConfirmationModal isOpen={showRejectModal} title="Reject Proposal" message="Are you sure you want to reject this?" onConfirm={handleRejectConfirm} onCancel={() => setShowRejectModal(false)} showReasonInput={true} isDestructive={true} />
         {showComparison && (
           <ProposalComparison
-            proposals={proposals}
+            proposals={localProposals}
             selectedIds={selectedForComparison}
             onClose={() => setShowComparison(false)}
             onSelectionChange={setSelectedForComparison}

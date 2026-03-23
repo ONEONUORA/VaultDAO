@@ -957,6 +957,74 @@ export const useVaultContract = () => {
         return blacklistAddresses.includes(recipient);
     }, [blacklistAddresses]);
 
+    /**
+     * Derive proposals from on-chain events.
+     * Replays proposal_created, proposal_approved, proposal_rejected, proposal_executed
+     * events to reconstruct current proposal state.
+     */
+    const getProposals = useCallback(async (): Promise<import('../app/dashboard/Proposals').Proposal[]> => {
+        // Fetch all relevant events in one pass
+        const result = await getVaultEvents(undefined, 200);
+        const activities = result.activities;
+
+        // Map to reconstruct proposal state keyed by proposal id
+        const proposalMap = new Map<string, import('../app/dashboard/Proposals').Proposal>();
+
+        // First pass: build proposals from creation events
+        for (const ev of activities) {
+            if (ev.type === 'proposal_created') {
+                const d = ev.details as Record<string, unknown>;
+                const id = String(ev.eventId.split('-')[0] ?? ev.eventId);
+                proposalMap.set(id, {
+                    id,
+                    proposer: String(d.proposer ?? ev.actor ?? ''),
+                    recipient: String(d.recipient ?? ''),
+                    amount: String(d.amount ?? '0'),
+                    token: 'NATIVE',
+                    memo: String(d.memo ?? ''),
+                    status: 'Pending',
+                    approvals: 0,
+                    threshold: 3,
+                    approvedBy: [],
+                    createdAt: ev.timestamp,
+                });
+            }
+        }
+
+        // Second pass: apply state transitions
+        for (const ev of activities) {
+            const id = String(ev.eventId.split('-')[0] ?? ev.eventId);
+            const proposal = proposalMap.get(id);
+            if (!proposal) continue;
+
+            if (ev.type === 'proposal_approved') {
+                const d = ev.details as Record<string, unknown>;
+                const approvalCount = Number(d.approval_count ?? proposal.approvals + 1);
+                const threshold = Number(d.threshold ?? proposal.threshold);
+                const updatedApprovedBy = proposal.approvedBy.includes(ev.actor)
+                    ? proposal.approvedBy
+                    : [...proposal.approvedBy, ev.actor];
+                proposalMap.set(id, {
+                    ...proposal,
+                    approvals: approvalCount,
+                    threshold,
+                    approvedBy: updatedApprovedBy,
+                    status: approvalCount >= threshold ? 'Approved' : 'Pending',
+                });
+            } else if (ev.type === 'proposal_rejected') {
+                proposalMap.set(id, { ...proposal, status: 'Rejected' });
+            } else if (ev.type === 'proposal_executed') {
+                proposalMap.set(id, { ...proposal, status: 'Executed' });
+            } else if (ev.type === 'proposal_ready') {
+                proposalMap.set(id, { ...proposal, status: 'Approved' });
+            }
+        }
+
+        return Array.from(proposalMap.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+    }, [getVaultEvents]);
+
     return {
         proposeTransfer,
         approveProposal,
@@ -1001,5 +1069,6 @@ export const useVaultContract = () => {
         getUserRole,
         assignRole: async () => { },
         updateSpendingLimits,
+        getProposals,
     };
 };
