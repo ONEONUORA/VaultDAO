@@ -2533,7 +2533,7 @@ impl VaultDAO {
         // IPFS CID v0 is 46 chars; CIDv1 base32 is 59+ chars; reject anything
         // outside the valid range with a dedicated error code.
         let alen = attachment.len();
-        if alen < MIN_ATTACHMENT_LEN || alen > MAX_ATTACHMENT_LEN {
+        if !(MIN_ATTACHMENT_LEN..=MAX_ATTACHMENT_LEN).contains(&alen) {
             return Err(VaultError::AttachmentHashInvalid);
         }
 
